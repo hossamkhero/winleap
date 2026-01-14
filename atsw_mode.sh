@@ -251,20 +251,51 @@ main() {
         exit 2
     fi
     
-    # Discover windows
+    # ========================================================================
+    # CRITICAL FIX: Start grabber FIRST to prevent keystroke leakage
+    # We grab the keyboard immediately, then compute prefixes while holding it
+    # ========================================================================
+    
+    # Log environment for debugging
+    log "DISPLAY=$DISPLAY"
+    log "GRABBER=$GRABBER"
+    log "GRABBER exists: $(test -x "$GRABBER" && echo yes || echo no)"
+    
+    # Create temp file for grabber stderr
+    GRABBER_ERR=$(mktemp)
+    
+    # Start the grabber as a coprocess (background process with I/O redirection)
+    # Redirect stderr to temp file for debugging
+    coproc GRABBER_PROC { "$GRABBER" 2>"$GRABBER_ERR"; }
+    
+    # Wait for READY signal from grabber
+    log "Waiting for keyboard grab..."
+    if ! read -r -u "${GRABBER_PROC[0]}" -t 2 ready_signal || [[ "$ready_signal" != "READY" ]]; then
+        log "ERROR: Grabber failed to initialize (got: '$ready_signal')"
+        log "Grabber stderr:"
+        if [[ -f "$GRABBER_ERR" ]]; then
+            cat "$GRABBER_ERR" >> "$LOGFILE"
+        fi
+        kill "${GRABBER_PROC_PID}" 2>/dev/null || true
+        rm -f "$GRABBER_ERR"
+        exit 2
+    fi
+    log "Keyboard grabbed successfully!"
+    rm -f "$GRABBER_ERR"
+    
+    # NOW do window discovery (keyboard is already grabbed, so no leakage)
     if ! discover_windows; then
         log "ERROR: Window discovery failed"
+        kill "${GRABBER_PROC_PID}" 2>/dev/null || true
         exit 2
     fi
     
     # Compute prefixes
     if ! compute_prefixes; then
         log "ERROR: Prefix computation failed"
+        kill "${GRABBER_PROC_PID}" 2>/dev/null || true
         exit 2
     fi
-    
-    # CRITICAL: Sleep is needed for hotkey to release
-    sleep 0.15
     
     # Buffer to accumulate keystrokes
     buffer=""
@@ -274,8 +305,8 @@ main() {
     log "  (Press keys to match prefix, ESC to cancel)"
     log ""
     
-    # Start the keyboard grabber and read its output
-    while IFS= read -r line; do
+    # Read from the already-running grabber coprocess
+    while IFS= read -r -u "${GRABBER_PROC[0]}" line; do
         case "$line" in
             "READY")
                 # Grabber is ready
@@ -334,7 +365,7 @@ main() {
                 log "SYM: $sym (ignored)"
                 ;;
         esac
-    done < <("$GRABBER")
+    done
     
     # If we get here, grabber exited unexpectedly
     log "ERROR: Grabber exited unexpectedly"

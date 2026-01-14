@@ -35,16 +35,37 @@ int main(int argc, char *argv[]) {
     
     root = DefaultRootWindow(display);
     
-    // Grab the keyboard - THIS IS THE KEY PART
-    // All keyboard input now comes to us, not to any other window
-    int grab_result = XGrabKeyboard(
-        display,
-        root,
-        True,                    // owner_events
-        GrabModeAsync,           // pointer_mode
-        GrabModeAsync,           // keyboard_mode  
-        CurrentTime
-    );
+    // Grab the keyboard with retry logic
+    // When launched via GNOME shortcut, GNOME may still have the keyboard grabbed
+    // We retry with increasing delays to give it time to release
+    int grab_result;
+    int max_retries = 10;
+    int retry_delay_us = 10000; // Start with 10ms
+    
+    for (int i = 0; i < max_retries; i++) {
+        grab_result = XGrabKeyboard(
+            display,
+            root,
+            True,                    // owner_events
+            GrabModeAsync,           // pointer_mode
+            GrabModeAsync,           // keyboard_mode  
+            CurrentTime
+        );
+        
+        if (grab_result == GrabSuccess) {
+            break;  // Successfully grabbed!
+        }
+        
+        // If this is AlreadyGrabbed (1), wait and retry
+        if (grab_result == AlreadyGrabbed && i < max_retries - 1) {
+            usleep(retry_delay_us);
+            retry_delay_us *= 1.5;  // Exponential backoff
+            continue;
+        }
+        
+        // Other errors or final retry failed
+        break;
+    }
     
     if (grab_result != GrabSuccess) {
         fprintf(stderr, "ERROR: Failed to grab keyboard (code %d)\n", grab_result);
