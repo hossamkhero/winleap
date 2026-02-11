@@ -1,0 +1,15 @@
+# Winleap config
+#
+# Mark mappings (number=WM_CLASS)
+# WM_CLASS matching is case-insensitive.
+
+1=zen
+2=com.mitchellh.ghostty
+3=obsidian
+4=discord
+
+# Ordered keys used for selecting app instances when multiple windows match a mark
+instance_keys=12345qwertyuiopasdfghjklzxcvbnm
+
+# Debug logging (debug_output.txt is written only when debug is enabled)
+debug=false

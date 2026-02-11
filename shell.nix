@@ -1,18 +1,18 @@
 { pkgs ? import <nixpkgs> {} }:
 
 pkgs.mkShell {
-  name = "atsw-dev";
+  name = "winleap-dev";
 
   buildInputs = with pkgs; [
-    # X11 libs for our C program
+    # X11 libs for winleap
     xorg.libX11
     xorg.libXi
     xorg.libXtst
-    
+
     # Compiler
     gcc
     pkg-config
-    
+
     # Useful X11 tools for debugging/testing
     xdotool
     xorg.xev
@@ -21,21 +21,18 @@ pkgs.mkShell {
     xorg.xwininfo
   ];
 
-  # Set up pkg-config path for X11
   shellHook = ''
-    echo "ATSW Development Shell"
-    echo "======================"
+    echo "Winleap Development Shell"
+    echo "========================="
     echo ""
-    echo "To compile grab_keys:"
-    echo "  gcc -o grab_keys grab_keys.c -lX11"
+    echo "To compile winleap:"
+    echo "  gcc -O2 -Wall -Wextra -o winleap winleap.c -lX11"
     echo ""
-    echo "To test the grabber:"
-    echo "  ./grab_keys"
+    echo "To run it:"
+    echo "  ./winleap 1"
+    echo "  ./winleap --current-workspace 1"
+    echo "  ./winleap --debug 1"
     echo ""
-    echo "To test the bash wrapper:"
-    echo "  ./atsw_mode.sh"
-    echo ""
-
 
     # switch to zsh once done
     zsh
