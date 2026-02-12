@@ -2,7 +2,7 @@
  * winleap.c - Mark-based window jump with explicit instance selection
  *
  * Usage:
- *   ./winleap [--config <path>] [--current-workspace] [--debug] <mark_number>
+ *   ./winleap [--config <path>] [--current-workspace] [--current-application] [--debug] <number>
  *   ./winleap --help
  *   ./winleap --open-debug
  *
@@ -241,7 +241,7 @@ int read_config_file(const char *filepath, Config *config) {
     }
 
     fclose(f);
-    return config->num_marks > 0;
+    return 1;
 }
 
 const char *find_wmclass_for_mark(const Config *config, int mark_num) {
@@ -506,6 +506,30 @@ long get_current_desktop(void) {
     return -1;
 }
 
+int get_active_window(Window *out_window) {
+    if (!out_window) return 0;
+
+    Atom actual_type;
+    int actual_format;
+    unsigned long nitems, bytes_after;
+    unsigned char *prop = NULL;
+
+    if (XGetWindowProperty(display, root, atom_net_active_window, 0, 1, False,
+                           XA_WINDOW, &actual_type, &actual_format,
+                           &nitems, &bytes_after, &prop) != Success || !prop) {
+        return 0;
+    }
+
+    if (nitems < 1) {
+        XFree(prop);
+        return 0;
+    }
+
+    *out_window = *((Window *)prop);
+    XFree(prop);
+    return 1;
+}
+
 int discover_windows(void) {
     log_section("DISCOVERING WINDOWS");
 
@@ -719,12 +743,13 @@ int select_instance_interactively(const Config *config, const int *matching_indi
 
 void print_usage(const char *prog, const char *config_path, const char *debug_path) {
     printf("Usage:\n");
-    printf("  %s [--config <path>] [--current-workspace] [--debug] <number>\n", prog);
+    printf("  %s [--config <path>] [--current-workspace] [--current-application] [--debug] <number>\n", prog);
     printf("  %s --open-debug\n", prog);
     printf("  %s --help\n\n", prog);
 
     printf("Options:\n");
     printf("  --current-workspace  Only consider windows in current workspace\n");
+    printf("  --current-application  Use active window app class; <number> becomes 1-based instance index\n");
     printf("  --debug              Force debug logging on for this run\n");
     printf("  --open-debug         Print debug log path and contents\n");
     printf("  --config <path>      Use a specific config file\n");
@@ -746,15 +771,18 @@ void print_usage(const char *prog, const char *config_path, const char *debug_pa
 
 int main(int argc, char *argv[]) {
     int current_workspace_only = 0;
+    int current_application_mode = 0;
     int cli_debug = 0;
     int open_debug = 0;
     int show_help = 0;
     const char *config_override = NULL;
-    const char *mark_arg = NULL;
+    const char *number_arg = NULL;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--current-workspace") == 0) {
             current_workspace_only = 1;
+        } else if (strcmp(argv[i], "--current-application") == 0) {
+            current_application_mode = 1;
         } else if (strcmp(argv[i], "--debug") == 0) {
             cli_debug = 1;
         } else if (strcmp(argv[i], "--open-debug") == 0) {
@@ -770,8 +798,8 @@ int main(int argc, char *argv[]) {
         } else if (argv[i][0] == '-') {
             fprintf(stderr, "Unknown option: %s\n", argv[i]);
             return 1;
-        } else if (!mark_arg) {
-            mark_arg = argv[i];
+        } else if (!number_arg) {
+            number_arg = argv[i];
         } else {
             fprintf(stderr, "Unexpected argument: %s\n", argv[i]);
             return 1;
@@ -793,14 +821,14 @@ int main(int argc, char *argv[]) {
         return print_debug_log(debug_path);
     }
 
-    if (!mark_arg) {
+    if (!number_arg) {
         print_usage(argv[0], config_path, debug_path);
         return 1;
     }
 
-    int mark_num = atoi(mark_arg);
-    if (mark_num <= 0) {
-        fprintf(stderr, "Invalid mark number: %s\n", mark_arg);
+    int requested_number = atoi(number_arg);
+    if (requested_number <= 0) {
+        fprintf(stderr, "Invalid number: %s\n", number_arg);
         return 1;
     }
 
@@ -823,22 +851,13 @@ int main(int argc, char *argv[]) {
     }
 
     log_section("WINLEAP STARTED");
-    log_msg("Mark requested: %d", mark_num);
+    log_msg("Number requested: %d", requested_number);
+    log_msg("Mode: %s", current_application_mode ? "current-application" : "mark");
     log_msg("Scope: %s", current_workspace_only ? "current workspace" : "global");
     log_msg("Debug source: %s", cli_debug ? "--debug" : (config.debug ? "config" : "disabled"));
     log_msg("Config path: %s", config_path);
     log_msg("Debug path: %s", debug_path);
     log_msg("Instance keys: %s", config.instance_keys);
-
-    const char *target_class = find_wmclass_for_mark(&config, mark_num);
-    if (!target_class) {
-        fprintf(stderr, "No mapping found for mark %d\n", mark_num);
-        log_msg("ERROR: No mapping found for mark %d", mark_num);
-        if (logfile) fclose(logfile);
-        return 1;
-    }
-
-    log_msg("Target WM_CLASS: %s", target_class);
 
     display = XOpenDisplay(NULL);
     if (!display) {
@@ -850,6 +869,42 @@ int main(int argc, char *argv[]) {
 
     root = DefaultRootWindow(display);
     init_atoms();
+
+    char active_class[MAX_CLASS_LEN] = {0};
+    const char *target_class = NULL;
+    int instance_number = requested_number;
+    if (current_application_mode) {
+        Window active_window = 0;
+        if (!get_active_window(&active_window) || active_window == 0) {
+            fprintf(stderr, "No active window found for --current-application mode\n");
+            log_msg("ERROR: Cannot resolve active window");
+            XCloseDisplay(display);
+            if (logfile) fclose(logfile);
+            return 1;
+        }
+        if (!get_wm_class(active_window, active_class, sizeof(active_class))) {
+            fprintf(stderr, "Failed to read WM_CLASS of active window\n");
+            log_msg("ERROR: Cannot read WM_CLASS for active window %lu", (unsigned long)active_window);
+            XCloseDisplay(display);
+            if (logfile) fclose(logfile);
+            return 1;
+        }
+        target_class = active_class;
+        log_msg("Active window: %lu", (unsigned long)active_window);
+        log_msg("Target WM_CLASS from active window: %s", target_class);
+        log_msg("Requested app instance index: %d", instance_number);
+    } else {
+        int mark_num = requested_number;
+        target_class = find_wmclass_for_mark(&config, mark_num);
+        if (!target_class) {
+            fprintf(stderr, "No mapping found for mark %d\n", mark_num);
+            log_msg("ERROR: No mapping found for mark %d", mark_num);
+            XCloseDisplay(display);
+            if (logfile) fclose(logfile);
+            return 1;
+        }
+        log_msg("Target WM_CLASS: %s", target_class);
+    }
 
     if (!discover_windows()) {
         fprintf(stderr, "Failed to discover windows\n");
@@ -895,7 +950,22 @@ int main(int argc, char *argv[]) {
 
     int target_idx = -1;
 
-    if (match_count == 1) {
+    if (current_application_mode) {
+        int target_pos = instance_number - 1;
+        if (target_pos < 0 || target_pos >= match_count) {
+            fprintf(stderr, "Requested instance %d, but found %d matching windows for %s%s\n",
+                    instance_number,
+                    match_count,
+                    target_class,
+                    current_workspace_only ? " (current workspace)" : "");
+            log_msg("ERROR: Requested instance %d but only %d matches", instance_number, match_count);
+            XCloseDisplay(display);
+            if (logfile) fclose(logfile);
+            return 1;
+        }
+        target_idx = matching_indices[target_pos];
+        log_msg("Current-application mode: selecting instance position %d directly", target_pos);
+    } else if (match_count == 1) {
         target_idx = matching_indices[0];
         log_msg("Single instance: immediate activation");
     } else {

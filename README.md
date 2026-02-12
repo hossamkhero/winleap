@@ -5,9 +5,26 @@ Window marks for direct switching that handles multi-instances of the same windo
 ### Usage
 
 ```bash
-./winleap [--config <path>] [--current-workspace] [--debug] <number>
+./winleap [--config <path>] [--current-workspace] [--current-application] [--debug] <number>
 ./winleap --open-debug
 ./winleap --help
+```
+
+Mode semantics for `<number>`:
+- Default mode: mark number from config (e.g. `1=zen`)
+- `--current-application`: 1-based instance index of the active app class
+
+Examples:
+
+```bash
+# mark mode
+./winleap 1
+
+# current app mode: jump to 2nd instance of currently focused app class
+./winleap --current-application 2
+
+# same as above, but only within current workspace
+./winleap --current-application --current-workspace 2
 ```
 
 ### Config
